@@ -1,0 +1,11 @@
+GEMINI_API_KEY = "AIzaSy..."
+GUEST_INVITE_CODE = "BEAST2025"
+TWILIO_ACCOUNT_SID = "AC..."
+TWILIO_AUTH_TOKEN = "..."
+TWILIO_PHONE_NUMBER = "+1..."
+ADMIN_MOBILE_NUMBER = "+91..."
+
+[gcp_service_account]
+type = "service_account"
+project_id = "..."
+# ... (rest of your google credentials)
