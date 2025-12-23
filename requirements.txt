@@ -1,1 +1,12 @@
-dghh
+
+streamlit
+pandas
+gspread
+oauth2client
+google-generativeai
+toml
+twilio
+Pillow
+pypdf
+youtube-transcript-api
+altair
