@@ -1,1 +1,112 @@
-uh
+{
+  "name": "IBPS Beast Auto-Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger-daily",
+      "name": "Every Day at 6AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const subjects = [\"IT\", \"Quant\", \"Reasoning\", \"English\", \"Finance\", \"Computer\"];\nconst subject = subjects[Math.floor(Math.random() * subjects.length)];\nconst date = new Date();\nconst year = date.getFullYear();\nconst month = String(date.getMonth() + 1).padStart(2, '0');\nconst map_sub = { \"IT\": \"Questions\", \"Quant\": \"Quant\", \"Reasoning\": \"Reasoning\", \"English\": \"Eng\", \"Finance\": \"Finance\", \"Computer\": \"Comp\" };\nconst sheetName = `${map_sub[subject] || 'Questions'}_${year}_${month}`;\nreturn { json: { subject: subject, sheetName: sheetName } };"
+      },
+      "id": "selector-logic",
+      "name": "Pick Subject",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "YOUR_GEMINI_API_KEY_HERE"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "contents",
+              "value": "={{ [{\n    \"parts\": [{\n        \"text\": `Generate 5 High-Level MCQs for IBPS SO ${$('Pick Subject').item.json.subject}. Format as raw JSON Array (no markdown) with keys: Question, A, B, C, D, E, Correct, Explanation, Topic. Ensure 'Topic' is specific (e.g. 'DBMS' not just 'IT').`\n    }]\n}] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "gemini-api",
+      "name": "Ask Gemini AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "let text = items[0].json.candidates[0].content.parts[0].text;\ntext = text.replace(/```json/g, '').replace(/```/g, '').trim();\nconst questions = JSON.parse(text);\nconst subject = $('Pick Subject').item.json.subject;\nconst sheetName = $('Pick Subject').item.json.sheetName;\nconst timestamp = Math.floor(Date.now() / 1000);\nconst dateStr = new Date().toISOString().split('T')[0];\nreturn questions.map((q, index) => ({\n  json: {\n    ID: `AUTO-${timestamp}-${index}`,\n    Date: dateStr,\n    Topic: q.Topic || subject,\n    Question: q.Question || q.question,\n    A: q.A, B: q.B, C: q.C, D: q.D, E: q.E || '',\n    Correct: q.Correct || q.correct,\n    Explanation: q.Explanation || q.explanation,\n    sheetName: sheetName\n  }\n}));"
+      },
+      "id": "parse-json",
+      "name": "Format Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID_HERE",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Format Data').item.json.sheetName }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            { "id": "ID", "value": "ID" },
+            { "id": "Date", "value": "Date" },
+            { "id": "Topic", "value": "Topic" },
+            { "id": "Question", "value": "Question" },
+            { "id": "A", "value": "A" },
+            { "id": "B", "value": "B" },
+            { "id": "C", "value": "C" },
+            { "id": "D", "value": "D" },
+            { "id": "E", "value": "E" },
+            { "id": "Correct", "value": "Correct" },
+            { "id": "Explanation", "value": "Explanation" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "google-sheets",
+      "name": "Save to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1340, 300]
+    }
+  ]
+}
+
