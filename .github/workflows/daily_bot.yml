@@ -2,28 +2,37 @@ name: IBPS Beast Daily Bot
 
 on:
   schedule:
-    # Runs at 00:30 UTC everyday (which is 06:00 AM Indian Standard Time)
-    - cron: '30 0 * * *'
-  workflow_dispatch: # Allows you to run it manually for testing
+    - cron: '0 * * * *' # Runs every hour
+  workflow_dispatch:      # Allows manual trigger
 
 jobs:
   feed_the_beast:
     runs-on: ubuntu-latest
 
     steps:
+    # 1. Download your code from GitHub to the robot's folder
     - name: Checkout Code
       uses: actions/checkout@v3
 
+    # 2. Install Python
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.10' 
 
+    # 3. Install the Google Brain libraries
     - name: Install Libraries
       run: |
-        pip install --upgrade pip
-        # We pin the version to 0.8.3 which is stable and knows what 'gemini-pro' is
-        pip install google-generativeai==0.8.3 gspread oauth2client
+        python -m pip install --upgrade pip
+        pip install --force-reinstall google-generativeai google-auth gspread oauth2client
+
+    # 4. RUN THE SCRIPT (This is the missing link!)
+    - name: Run Bot Script
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+      run: python bot_script.py  # <--- HERE IS THE CONNECTION
+    
     - name: Run The Generator
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
