@@ -11,10 +11,8 @@ from google.oauth2.service_account import Credentials
 
 # --- CONFIGURATION ---
 RUNTIME_MINUTES = 5        # Run for 5 minutes
-RETRY_DELAY = 60           # If 429 error, wait 60s (Google requirement)
+RETRY_DELAY = 60           # If 429 error, wait 60s
 MASTER_SHEET_NAME = "IBPS_Bot_Data"
-
-# FORCE THE STABLE MODEL (No more auto-guessing)
 MODEL_NAME = "models/gemini-1.5-flash" 
 
 print(f"🚀 STARTING BEAST BOT LOOP (Model: {MODEL_NAME})...")
@@ -39,6 +37,9 @@ try:
     try:
         sh = client.open(MASTER_SHEET_NAME)
         print(f"✅ Connection Established: {MASTER_SHEET_NAME}")
+        # --- THE GHOST FILE DETECTOR ---
+        print(f"🔗 CLICK THIS LINK TO SEE YOUR DATA: {sh.url}")
+        print("---------------------------------------------------")
     except gspread.SpreadsheetNotFound:
         print(f"❌ FATAL ERROR: Sheet '{MASTER_SHEET_NAME}' not found.")
         print("👉 ACTION: Create a blank Google Sheet named 'IBPS_Bot_Data' and share it with the bot email.")
@@ -85,7 +86,7 @@ while time.time() < end_time:
             continue
 
         json_str = match.group(0)
-        json_str = re.sub(r'(?<!\\)\n', ' ', json_str)
+        json_str = re.sub(r'(?<!\\)\n', ' ', json_str) # remove bad newlines
         data = json.loads(json_str)
 
         # --- C. SAVE TO SHEET ---
@@ -110,7 +111,7 @@ while time.time() < end_time:
         time.sleep(10)
 
     except Exception as e:
-        # --- D. ERROR HANDLING (NO CRASHING) ---
+        # --- D. ERROR HANDLING ---
         print(f"   ❌ ERROR this cycle: {e}")
         
         if "429" in str(e):
