@@ -10,14 +10,16 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURATION ---
-RUNTIME_MINUTES = 5       # Run for 5 minutes
-RETRY_DELAY = 10          # Wait 10s if it fails
-SUCCESS_DELAY = 15        # Wait 15s after success (to save quota)
+RUNTIME_MINUTES = 5        # Run for 5 minutes
+RETRY_DELAY = 60           # If 429 error, wait 60s (Google requirement)
 MASTER_SHEET_NAME = "IBPS_Bot_Data"
 
-print(f"🚀 STARTING BEAST BOT LOOP (Running for {RUNTIME_MINUTES} mins)...")
+# FORCE THE STABLE MODEL (No more auto-guessing)
+MODEL_NAME = "models/gemini-1.5-flash" 
 
-# --- 1. AUTHENTICATION (Do this once) ---
+print(f"🚀 STARTING BEAST BOT LOOP (Model: {MODEL_NAME})...")
+
+# --- 1. AUTHENTICATION ---
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 GCP_CREDS_JSON = os.environ.get('GCP_CREDENTIALS')
 
@@ -26,22 +28,7 @@ if not GCP_CREDS_JSON: print("❌ Error: GCP_CREDENTIALS missing"); exit(1)
 
 genai.configure(api_key=GEMINI_KEY)
 
-# Smart Model Selector
-def get_valid_model():
-    try:
-        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        priority = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro']
-        for p in priority:
-            for m in all_models:
-                if p in m: return m
-        return all_models[0]
-    except:
-        return "models/gemini-1.5-flash"
-
-active_model_name = get_valid_model()
-print(f"🤖 Engine Selected: {active_model_name}")
-
-# --- 2. CONNECT TO DATABASE (Do this once) ---
+# --- 2. CONNECT TO DATABASE ---
 try:
     print("📡 Connecting to Google Sheets...")
     creds_dict = json.loads(GCP_CREDS_JSON)
@@ -49,19 +36,18 @@ try:
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     
-    # Verify Sheet Exists
     try:
         sh = client.open(MASTER_SHEET_NAME)
         print(f"✅ Connection Established: {MASTER_SHEET_NAME}")
     except gspread.SpreadsheetNotFound:
         print(f"❌ FATAL ERROR: Sheet '{MASTER_SHEET_NAME}' not found.")
-        print("👉 Please create 'IBPS_Bot_Data' in Google Drive and share it with the bot.")
+        print("👉 ACTION: Create a blank Google Sheet named 'IBPS_Bot_Data' and share it with the bot email.")
         exit(1)
 except Exception as e:
     print(f"❌ FATAL AUTH ERROR: {e}")
     exit(1)
 
-# --- 3. THE LOOP (Running for 5 Minutes) ---
+# --- 3. THE LOOP ---
 start_time = time.time()
 end_time = start_time + (RUNTIME_MINUTES * 60)
 
@@ -81,14 +67,14 @@ while time.time() < end_time:
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
         }
 
-        model = genai.GenerativeModel(active_model_name)
+        model = genai.GenerativeModel(MODEL_NAME)
         prompt = f"""
         Generate 3 MCQs for IBPS SO exam on subject: {sub}.
         STRICT JSON ONLY. No markdown.
         Format: [{{"Question": "...", "A": "...", "B": "...", "C": "...", "D": "...", "Correct": "A", "Explanation": "..."}}]
         """
         
-        # Timeout set to 30s to prevent hanging
+        # Timeout set to 30s
         resp = model.generate_content(prompt, safety_settings=safety_settings, request_options={"timeout": 30})
         
         # --- B. PARSE JSON ---
@@ -120,13 +106,18 @@ while time.time() < end_time:
         ws.append_rows(rows)
         print(f"   ✅ SUCCESS! Added {len(data)} questions.")
         
-        # Sleep to be nice to Google API
-        print(f"   💤 Resting for {SUCCESS_DELAY}s...")
-        time.sleep(SUCCESS_DELAY)
+        # Sleep 10s to be nice
+        time.sleep(10)
 
     except Exception as e:
+        # --- D. ERROR HANDLING (NO CRASHING) ---
         print(f"   ❌ ERROR this cycle: {e}")
-        print(f"   🔄 Retrying in {RETRY_DELAY}s...")
-        time.sleep(RETRY_DELAY)
+        
+        if "429" in str(e):
+            print(f"   🛑 Quota Limit Hit. Sleeping for {RETRY_DELAY}s...")
+            time.sleep(RETRY_DELAY)
+        else:
+            print("   🔄 Retrying quickly...")
+            time.sleep(5)
 
-print("\n🏁 TIMEOUT REACHED. Beast Bot going to sleep.")
+print("\n🏁 TIMEOUT REACHED. Beast Bot finished.")
