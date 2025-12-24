@@ -1,0 +1,96 @@
+name: IBPS Beast Daily Bot
+
+on:
+  schedule:
+    # Runs at 00:30 UTC everyday (which is 06:00 AM Indian Standard Time)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Allows you to run it manually for testing
+
+jobs:
+  feed_the_beast:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Install Libraries
+      run: |
+        pip install google-generativeai gspread oauth2client
+
+    - name: Run The Generator
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+      run: |
+        python -c "
+        import os, json, random, time
+        from datetime import datetime
+        import google.generativeai as genai
+        import gspread
+        from oauth2client.service_account import ServiceAccountCredentials
+
+        # 1. SETUP KEYS
+        GEMINI_KEY = os.environ['GEMINI_API_KEY']
+        # Load GCP Creds from the big secret block
+        GCP_CREDS_DICT = json.loads(os.environ['GCP_CREDENTIALS'])
+        
+        # 2. PICK A RANDOM SUBJECT
+        subjects = ['IT', 'Quant', 'Reasoning', 'English', 'Computer']
+        sub = random.choice(subjects)
+        print(f'🦁 Beast Bot woke up. Target: {sub}')
+
+        # 3. ASK GEMINI (THE BRAIN)
+        genai.configure(api_key=GEMINI_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f'Generate 5 High-Level MCQs for IBPS SO {sub}. Format: JSON Array with keys: Question, A, B, C, D, Correct, Explanation, Topic.'
+        
+        try:
+            resp = model.generate_content(prompt)
+            clean_json = resp.text.replace('```json','').replace('```','').strip()
+            data = json.loads(clean_json)
+        except Exception as e:
+            print(f'❌ AI Brain Fail: {e}')
+            exit(1)
+
+        # 4. SAVE TO SHEETS (THE MEMORY)
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(GCP_CREDS_DICT, scope)
+        client = gspread.authorize(creds)
+
+        # Map Subject to Sheet Name
+        map_sub = {'IT': 'Questions', 'Quant': 'Quant', 'Reasoning': 'Reasoning', 'English': 'Eng', 'Computer': 'Comp'}
+        prefix = map_sub.get(sub, 'Questions')
+        now = datetime.now()
+        sheet_name = f'{prefix}_{now.year}_{now.month:02d}'
+
+        try:
+            try:
+                sh = client.open(sheet_name)
+            except:
+                sh = client.create(sheet_name)
+                sh.get_worksheet(0).append_row(['ID','Date','Topic','Question','A','B','C','D','E','Correct','Explanation'])
+            
+            ws = sh.get_worksheet(0)
+            rows = []
+            for q in data:
+                rows.append([
+                    f'AUTO-{int(time.time())}', 
+                    str(now), 
+                    q.get('Topic', sub), 
+                    q.get('Question'), 
+                    q.get('A'), q.get('B'), q.get('C'), q.get('D'), '', 
+                    q.get('Correct'), 
+                    q.get('Explanation')
+                ])
+            ws.append_rows(rows)
+            print(f'✅ Successfully fed 5 new {sub} questions to the Beast.')
+        except Exception as e:
+            print(f'❌ Database Fail: {e}')
+            exit(1)
+        "
