@@ -19,10 +19,32 @@ if not GCP_CREDS_JSON: print("❌ Error: GCP_CREDENTIALS missing"); exit(1)
 
 genai.configure(api_key=GEMINI_KEY)
 
-# --- 2. SELECT MODEL (THE FIX) ---
-# We switch to 1.5-flash because 2.0-exp has a strict quota limit right now
-active_model_name = "models/gemini-1.5-flash"
-print(f"🤖 Target Model: {active_model_name}")
+# --- 2. SMART MODEL SELECTOR (The Fix) ---
+def get_working_model():
+    print("🔎 Scanning for available models...")
+    available_models = []
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        # Priority: Try Flash -> Then Pro -> Then anything else
+        for m in available_models:
+            if 'flash' in m and '1.5' in m: return m
+        for m in available_models:
+            if 'flash' in m: return m
+        for m in available_models:
+            if 'pro' in m: return m
+        
+        # If list is empty/fails, default to the classic
+        return available_models[0] if available_models else "models/gemini-pro"
+        
+    except Exception as e:
+        print(f"⚠️ Model scan failed ({e}). Defaulting to gemini-pro")
+        return "models/gemini-pro"
+
+active_model_name = get_working_model()
+print(f"🤖 Selected Model: {active_model_name}")
 
 # --- 3. GENERATE CONTENT ---
 sub = random.choice(['IT', 'Quant', 'Reasoning', 'English', 'Computer'])
@@ -35,45 +57,32 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-def generate_with_retry():
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            print(f"⏳ Asking Gemini (Attempt {attempt+1})...")
-            model = genai.GenerativeModel(active_model_name)
-            prompt = f"""
-            You are an expert exam setter for IBPS SO.
-            Generate 5 High-Level MCQs for the subject: {sub}.
-            STRICT FORMATTING RULES:
-            1. Output MUST be a raw JSON Array.
-            2. Do not use markdown blocks.
-            3. Keys: Question, A, B, C, D, Correct, Explanation, Topic.
-            4. Ensure all text is single-line strings.
-            """
-            
-            resp = model.generate_content(
-                prompt, 
-                safety_settings=safety_settings,
-                request_options={"timeout": 60}
-            )
-            return resp.text
-            
-        except Exception as e:
-            if "429" in str(e):
-                print("⚠️ Quota hit. Waiting 60 seconds...")
-                time.sleep(60)
-            else:
-                raise e
-    raise Exception("Max retries exceeded")
-
 try:
-    raw_text = generate_with_retry()
+    print("⏳ Asking Gemini...")
+    model = genai.GenerativeModel(active_model_name)
+    prompt = f"""
+    You are an expert exam setter for IBPS SO.
+    Generate 5 High-Level MCQs for the subject: {sub}.
+    STRICT FORMATTING RULES:
+    1. Output MUST be a raw JSON Array.
+    2. Do not use markdown blocks.
+    3. Keys: Question, A, B, C, D, Correct, Explanation, Topic.
+    4. Ensure all text is single-line strings.
+    """
+    
+    # 60s Timeout to prevent hanging
+    resp = model.generate_content(
+        prompt, 
+        safety_settings=safety_settings,
+        request_options={"timeout": 60}
+    )
     
     # --- SANITIZER ---
+    raw_text = resp.text
     match = re.search(r'\[.*\]', raw_text, re.DOTALL)
     if match:
         json_str = match.group(0)
-        # Fix bad control characters
+        # Scrub bad characters
         json_str = re.sub(r'(?<!\\)\n', ' ', json_str)
         json_str = re.sub(r'[\x00-\x1f]', '', json_str)
         
@@ -81,7 +90,7 @@ try:
             data = json.loads(json_str)
             print(f"🧠 Generated {len(data)} questions.")
         except:
-            # Last ditch effort: simple string replace
+            # Last resort repair
             data = json.loads(json_str.replace("'", '"'))
     else:
         print("⚠️ No JSON brackets found.")
