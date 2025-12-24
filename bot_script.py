@@ -9,7 +9,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURATION ---
-# We are targeting the file the bot PROVED it can see
 TARGET_SHEET = "IBPS_Bot_Data" 
 RUNTIME_MINUTES = 5
 
@@ -36,11 +35,10 @@ try:
     print(f"✅ SUCCESS! Connected to '{TARGET_SHEET}'")
     print(f"🔗 Writing data to: {sh.url}")
     
-    # Check if header exists, if not, write it
+    # Check/Add Headers
     ws = sh.get_worksheet(0)
     if not ws.row_values(1):
         ws.append_row(['ID','Date','Subject','Question','A','B','C','D','Correct','Explanation'])
-        print("   (Added missing headers to row 1)")
 
 except gspread.SpreadsheetNotFound:
     print(f"❌ ERROR: Still cannot find '{TARGET_SHEET}'. Check permissions.")
@@ -81,10 +79,22 @@ while time.time() < end_time:
             json_str = match.group(0)
             if json_str.startswith('{'): json_str = f"[{json_str}]"
             data = json.loads(json_str)
-            
-            # Save
-            ws = sh.get_worksheet(0)
             q = data[0]
+
+            # --- PRINT TO SCREEN (New Feature) ---
+            print("\n" + "="*40)
+            print(f"🦁 Subject: {sub}")
+            print(f"❓ Question: {q.get('Question')}")
+            print(f"   A) {q.get('A')}")
+            print(f"   B) {q.get('B')}")
+            print(f"   C) {q.get('C')}")
+            print(f"   D) {q.get('D')}")
+            print(f"✅ Correct: {q.get('Correct')}")
+            print("="*40 + "\n")
+            # -------------------------------------
+            
+            # Save to Sheet
+            ws = sh.get_worksheet(0)
             ws.append_row([
                 f'AUTO-{int(time.time())}', 
                 str(datetime.now()), 
@@ -94,7 +104,7 @@ while time.time() < end_time:
                 q.get('Correct'), 
                 q.get('Explanation')
             ])
-            print(f"   ✅ SUCCESS! Saved new question.")
+            print(f"   ✅ SUCCESS! Saved to Google Sheet.")
             time.sleep(15) 
         else:
             print("   ⚠️ No JSON found.")
