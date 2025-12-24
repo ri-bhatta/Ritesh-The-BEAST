@@ -9,14 +9,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURATION ---
-# 1. NEW SHEET NAME (Forces a fresh start)
+# We force a new sheet to avoid "Ghost File" confusion
 MASTER_SHEET_NAME = "Beast_Bot_Final"
-# 2. OLD RELIABLE MODEL (Fixes the 404 error)
-MODEL_NAME = "models/gemini-pro"
 
-print(f"🚀 STARTING BEAST BOT (Target: {MASTER_SHEET_NAME})...")
+print(f"🚀 STARTING BEAST BOT (Universal Fix)...")
 
-# --- AUTHENTICATION ---
+# --- 1. AUTHENTICATION ---
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 GCP_CREDS_JSON = os.environ.get('GCP_CREDENTIALS')
 
@@ -25,7 +23,37 @@ if not GCP_CREDS_JSON: print("❌ Error: GCP_CREDENTIALS missing"); exit(1)
 
 genai.configure(api_key=GEMINI_KEY)
 
-# --- CONNECT AND CREATE SHEET ---
+# --- 2. INTELLIGENT MODEL SCANNER ---
+# This fixes the 404 Error by asking Google: "What models do I have?"
+def get_working_model():
+    print("🔎 Scanning your API Key for available models...")
+    try:
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        print(f"   📋 You have access to: {available_models}")
+        
+        # Priority: Flash -> Pro -> 1.0 -> Any
+        if 'models/gemini-1.5-flash' in available_models: return 'models/gemini-1.5-flash'
+        if 'models/gemini-1.5-pro' in available_models: return 'models/gemini-1.5-pro'
+        if 'models/gemini-pro' in available_models: return 'models/gemini-pro'
+        
+        return available_models[0] if available_models else None
+    except Exception as e:
+        print(f"⚠️ Scan failed: {e}")
+        return "models/gemini-pro" # Last resort fallback
+
+MODEL_NAME = get_working_model()
+if not MODEL_NAME:
+    print("❌ FATAL: Your API Key has NO access to any text generation models.")
+    print("👉 ACTION: Go to aistudio.google.com and create a new FREE API Key.")
+    exit(1)
+
+print(f"🤖 BOT LOCKED ONTO: {MODEL_NAME}")
+
+# --- 3. CONNECT TO DATABASE ---
 try:
     print("📡 Connecting to Google Sheets...")
     creds_dict = json.loads(GCP_CREDS_JSON)
@@ -39,21 +67,20 @@ try:
     except gspread.SpreadsheetNotFound:
         print(f"🆕 Creating NEW sheet: {MASTER_SHEET_NAME}")
         sh = client.create(MASTER_SHEET_NAME)
-        # SHARE IT WITH YOUR EMAIL SO YOU CAN SEE IT
-        # (This uses the email inside your credentials file as a backup)
         sh.share(creds_dict['client_email'], perm_type='user', role='writer')
         sh.get_worksheet(0).append_row(['ID','Date','Subject','Question','A','B','C','D','Correct','Explanation'])
 
-    print(f"🔗 CLICK THIS LINK TO OPEN THE SHEET: {sh.url}")
+    print("-" * 50)
+    print(f"🔗 CLICK THIS LINK TO SEE DATA: {sh.url}")
     print("-" * 50)
 
 except Exception as e:
     print(f"❌ FATAL DATABASE ERROR: {e}")
     exit(1)
 
-# --- GENERATE AND SAVE ---
+# --- 4. GENERATE AND SAVE ---
 try:
-    print(f"⏳ Asking Gemini ({MODEL_NAME})...")
+    print(f"⏳ Asking Gemini...")
     model = genai.GenerativeModel(MODEL_NAME)
     
     sub = random.choice(['IT', 'Computer', 'Reasoning'])
@@ -65,12 +92,11 @@ try:
     resp = model.generate_content(prompt)
     
     # Parse
-    match = re.search(r'\{.*\}', resp.text, re.DOTALL) # Look for single object {}
-    if not match: match = re.search(r'\[.*\]', resp.text, re.DOTALL) # Look for array []
+    match = re.search(r'\{.*\}', resp.text, re.DOTALL) # Look for object
+    if not match: match = re.search(r'\[.*\]', resp.text, re.DOTALL) # Look for array
     
     if match:
         json_str = match.group(0)
-        # Handle if it returned a single object instead of a list
         if json_str.startswith('{'): json_str = f"[{json_str}]"
         data = json.loads(json_str)
         
@@ -94,6 +120,3 @@ try:
 
 except Exception as e:
     print(f"❌ AI ERROR: {e}")
-    # Force write a debug row even if AI fails
-    sh.get_worksheet(0).append_row(["ERROR", str(datetime.now()), "DEBUG", str(e)])
-    print("⚠️ Wrote error message to sheet.")
