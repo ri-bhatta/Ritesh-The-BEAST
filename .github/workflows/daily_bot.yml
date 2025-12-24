@@ -21,8 +21,9 @@ jobs:
 
     - name: Install Libraries
       run: |
-        pip install google-generativeai gspread oauth2client
-
+        pip install --upgrade pip
+        # We pin the version to 0.8.3 which is stable and knows what 'gemini-pro' is
+        pip install google-generativeai==0.8.3 gspread oauth2client
     - name: Run The Generator
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
