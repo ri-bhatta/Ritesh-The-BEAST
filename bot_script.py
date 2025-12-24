@@ -10,7 +10,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- 1. SETUP ---
-print("🚀 Starting Beast Bot...")
+print("🚀 Starting Beast Bot (DEBUG MODE)...")
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 GCP_CREDS_JSON = os.environ.get('GCP_CREDENTIALS')
 
@@ -19,22 +19,15 @@ if not GCP_CREDS_JSON: print("❌ Error: GCP_CREDENTIALS missing"); exit(1)
 
 genai.configure(api_key=GEMINI_KEY)
 
-# --- 2. SMART MODEL SELECTOR ---
-def get_working_model():
-    print("🔎 Scanning for available models...")
-    try:
-        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        # Prefer Flash 1.5 (Most reliable free tier)
-        for m in models:
-            if 'flash' in m and '1.5' in m: return m
-        return models[0] if models else "models/gemini-1.5-flash"
-    except:
-        return "models/gemini-1.5-flash"
+# --- 2. ROBUST MODEL SELECTION ---
+# We force 1.5-flash because it is the most stable for JSON
+active_model_name = "models/gemini-1.5-flash"
+print(f"🤖 Target Model: {active_model_name}")
 
-active_model_name = get_working_model()
-print(f"🤖 Selected Model: {active_model_name}")
+# --- 3. GENERATION WITH DEBUGGING ---
+sub = random.choice(['IT', 'Quant', 'Reasoning', 'English', 'Computer'])
+print(f'🦁 Beast Bot Target: {sub}')
 
-# --- 3. GENERATION FUNCTION (With Self-Healing) ---
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -42,58 +35,59 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-def generate_questions():
-    # List of subjects. We try 'Reasoning' first, but if it fails, we swap.
-    subjects = ['Reasoning', 'IT', 'Computer', 'English', 'Quant']
+data = [] # Store questions here
+
+try:
+    print("⏳ Asking Gemini...")
+    model = genai.GenerativeModel(active_model_name)
+    prompt = f"""
+    Generate 5 MCQs for IBPS SO exam on subject: {sub}.
+    STRICT JSON ONLY. No markdown. No "Here is the JSON".
+    Format: [{{"Question": "...", "A": "...", "B": "...", "C": "...", "D": "...", "Correct": "A", "Explanation": "...", "Topic": "..."}}]
+    """
     
-    for attempt in range(3):
-        sub = random.choice(subjects)
-        print(f"🦁 Attempt {attempt+1}: Targeting {sub}...")
-        
+    # 30s Timeout
+    resp = model.generate_content(
+        prompt, 
+        safety_settings=safety_settings,
+        request_options={"timeout": 30}
+    )
+    
+    # --- CRITICAL DEBUG STEP ---
+    # This prints EXACTLY what the AI sent back. Look at this in your logs!
+    print(f"\n📝 RAW AI RESPONSE START:\n{resp.text}\n📝 RAW AI RESPONSE END\n")
+    
+    # Clean and Parse
+    raw_text = resp.text
+    match = re.search(r'\[.*\]', raw_text, re.DOTALL)
+    
+    if match:
+        json_str = match.group(0)
+        # Fix common JSON breaks
+        json_str = re.sub(r'(?<!\\)\n', ' ', json_str)
         try:
-            model = genai.GenerativeModel(active_model_name)
-            prompt = f"""
-            Generate 5 MCQs for IBPS SO exam on subject: {sub}.
-            Return ONLY a raw JSON Array. Keys: Question, A, B, C, D, Correct, Explanation, Topic.
-            No markdown. No extra text.
-            """
-            
-            resp = model.generate_content(prompt, safety_settings=safety_settings)
-            
-            # CHECK: Did we get blocked?
-            if not resp.parts:
-                print(f"⚠️ Blocked/Empty response for {sub}. Retrying...")
-                print(f"   Reason: {resp.prompt_feedback}")
-                time.sleep(2)
-                continue # Try next loop
-                
-            text = resp.text
-            
-            # CLEAN: Find the JSON brackets
-            match = re.search(r'\[.*\]', text, re.DOTALL)
-            if not match:
-                print(f"⚠️ No JSON found in response for {sub}.")
-                continue
-                
-            json_str = match.group(0)
-            # Remove bad characters
-            json_str = re.sub(r'(?<!\\)\n', ' ', json_str) # remove newlines
-            
             data = json.loads(json_str)
-            return sub, data # SUCCESS! Return the subject and data
-            
-        except Exception as e:
-            print(f"⚠️ Error generating {sub}: {e}")
-            time.sleep(2)
-    
-    print("❌ All 3 attempts failed.")
-    exit(1)
+            print(f"🧠 Successfully parsed {len(data)} questions.")
+        except:
+            print("⚠️ Parsing failed even after finding brackets.")
+    else:
+        print("⚠️ No JSON brackets [] found in response.")
 
-# Run the Generator
-target_subject, data = generate_questions()
-print(f"🧠 Successfully generated {len(data)} questions for {target_subject}")
+except Exception as e:
+    print(f"❌ AI Generation Error: {e}")
 
-# --- 4. SAVE TO SHEETS ---
+# --- 4. BACKUP PLAN (The Fail-Safe) ---
+# If AI failed (data is empty), we create a dummy question so the script DOES NOT CRASH.
+if not data:
+    print("⚠️ AI Failed to provide valid JSON. Using BACKUP QUESTION to keep pipeline alive.")
+    data = [{
+        "Question": f"⚠️ AI ERROR on {sub}. This is a test row to prove Database works.",
+        "A": "Ignore", "B": "Ignore", "C": "Ignore", "D": "Ignore",
+        "Correct": "A", "Explanation": "Check GitHub Logs for 'RAW AI RESPONSE'",
+        "Topic": "Debug"
+    }]
+
+# --- 5. SAVE TO SHEETS ---
 try:
     print("📡 Connecting to Google Sheets...")
     creds_dict = json.loads(GCP_CREDS_JSON)
@@ -102,7 +96,7 @@ try:
     client = gspread.authorize(creds)
 
     map_sub = {'IT': 'Questions', 'Quant': 'Quant', 'Reasoning': 'Reasoning', 'English': 'Eng', 'Computer': 'Comp'}
-    prefix = map_sub.get(target_subject, 'Questions')
+    prefix = map_sub.get(sub, 'Questions')
     now = datetime.now()
     sheet_name = f'{prefix}_{now.year}_{now.month:02d}'
 
@@ -115,9 +109,9 @@ try:
         sh.get_worksheet(0).append_row(['ID','Date','Topic','Question','A','B','C','D','E','Correct','Explanation'])
 
     ws = sh.get_worksheet(0)
-    rows = [[f'AUTO-{int(time.time())}', str(now), q.get('Topic', target_subject), q.get('Question'), q.get('A'), q.get('B'), q.get('C'), q.get('D'), '', q.get('Correct'), q.get('Explanation')] for q in data]
+    rows = [[f'AUTO-{int(time.time())}', str(now), q.get('Topic', sub), q.get('Question'), q.get('A'), q.get('B'), q.get('C'), q.get('D'), '', q.get('Correct'), q.get('Explanation')] for q in data]
     ws.append_rows(rows)
-    print(f"✅ SUCCESS! Saved to {sheet_name}")
+    print(f"✅ SUCCESS! Saved {len(data)} rows to {sheet_name}")
 
 except Exception as e:
     print(f"❌ Database Error: {e}")
