@@ -1,17 +1,43 @@
-name: Run Fix Script manually
+name: IBPS Beast Daily Bot
 
-on: workflow_dispatch  # Adds a "Run" button
+on:
+  schedule:
+    - cron: '0 * * * *' # Runs every hour
+  workflow_dispatch:      # Allows manual trigger
 
 jobs:
-  run-script:
+  feed_the_beast:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+    # 1. Get the code
+    - name: Checkout Code
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    # 2. Install Python
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10' 
 
-      - name: Run the script
-        run: python validate_key.py
+    # 3. Install Libraries (Force Reinstall to fix 'module not found')
+    - name: Install Libraries
+      run: |
+        python -m pip install --upgrade pip
+        pip install --force-reinstall google-generativeai google-auth gspread oauth2client
+
+    # 4. DECODE KEY & RUN BOT (The Fix)
+    - name: Run Bot Script
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        GCP_ENCODED_KEY: ${{ secrets.GCP_CREDENTIALS }} # Reads the Base64 string
+      run: |
+        # Step A: Decode the Base64 string back into a real JSON file
+        echo $GCP_ENCODED_KEY | base64 -d > gcp_key.json
+        
+        # Step B: Read that JSON file into the variable your script expects
+        # This ensures the newlines and spaces are perfect.
+        export GCP_CREDENTIALS=$(cat gcp_key.json)
+        
+        # Step C: Run the Python script
+        python bot_script.py
