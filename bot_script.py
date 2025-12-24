@@ -9,10 +9,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURATION ---
-# We force a new sheet to avoid "Ghost File" confusion
-MASTER_SHEET_NAME = "Beast_Bot_Final"
+TARGET_SHEET = "IBPS_Master_Sheet"  # It will ONLY look for this.
+RUNTIME_MINUTES = 5
 
-print(f"🚀 STARTING BEAST BOT (Universal Fix)...")
+print(f"🚀 STARTING BEAST BOT (Smart Radar Mode)...")
 
 # --- 1. AUTHENTICATION ---
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
@@ -23,100 +23,93 @@ if not GCP_CREDS_JSON: print("❌ Error: GCP_CREDENTIALS missing"); exit(1)
 
 genai.configure(api_key=GEMINI_KEY)
 
-# --- 2. INTELLIGENT MODEL SCANNER ---
-# This fixes the 404 Error by asking Google: "What models do I have?"
-def get_working_model():
-    print("🔎 Scanning your API Key for available models...")
-    try:
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-        
-        print(f"   📋 You have access to: {available_models}")
-        
-        # Priority: Flash -> Pro -> 1.0 -> Any
-        if 'models/gemini-1.5-flash' in available_models: return 'models/gemini-1.5-flash'
-        if 'models/gemini-1.5-pro' in available_models: return 'models/gemini-1.5-pro'
-        if 'models/gemini-pro' in available_models: return 'models/gemini-pro'
-        
-        return available_models[0] if available_models else None
-    except Exception as e:
-        print(f"⚠️ Scan failed: {e}")
-        return "models/gemini-pro" # Last resort fallback
+# --- 2. CONNECT TO DATABASE (The Critical Step) ---
+print("📡 Connecting to Google Sheets...")
+creds_dict = json.loads(GCP_CREDS_JSON)
+scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+client = gspread.authorize(creds)
 
-MODEL_NAME = get_working_model()
-if not MODEL_NAME:
-    print("❌ FATAL: Your API Key has NO access to any text generation models.")
-    print("👉 ACTION: Go to aistudio.google.com and create a new FREE API Key.")
-    exit(1)
-
-print(f"🤖 BOT LOCKED ONTO: {MODEL_NAME}")
-
-# --- 3. CONNECT TO DATABASE ---
 try:
-    print("📡 Connecting to Google Sheets...")
-    creds_dict = json.loads(GCP_CREDS_JSON)
-    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    client = gspread.authorize(creds)
-    
-    try:
-        sh = client.open(MASTER_SHEET_NAME)
-        print(f"✅ Found existing sheet: {MASTER_SHEET_NAME}")
-    except gspread.SpreadsheetNotFound:
-        print(f"🆕 Creating NEW sheet: {MASTER_SHEET_NAME}")
-        sh = client.create(MASTER_SHEET_NAME)
-        sh.share(creds_dict['client_email'], perm_type='user', role='writer')
-        sh.get_worksheet(0).append_row(['ID','Date','Subject','Question','A','B','C','D','Correct','Explanation'])
+    # TRY TO OPEN THE SHEET
+    sh = client.open(TARGET_SHEET)
+    print(f"✅ SUCCESS! Connected to '{TARGET_SHEET}'")
+    print(f"🔗 Writing data to: {sh.url}")
 
-    print("-" * 50)
-    print(f"🔗 CLICK THIS LINK TO SEE DATA: {sh.url}")
-    print("-" * 50)
-
-except Exception as e:
-    print(f"❌ FATAL DATABASE ERROR: {e}")
-    exit(1)
-
-# --- 4. GENERATE AND SAVE ---
-try:
-    print(f"⏳ Asking Gemini...")
-    model = genai.GenerativeModel(MODEL_NAME)
+except gspread.SpreadsheetNotFound:
+    # IF FAILED: RUN RADAR SCAN
+    print(f"❌ ERROR: Could not find '{TARGET_SHEET}'")
+    print("🔎 SCANNING FOR WHAT I CAN SEE...")
     
-    sub = random.choice(['IT', 'Computer', 'Reasoning'])
-    prompt = f"""
-    Generate 1 MCQ for IBPS SO exam on subject: {sub}.
-    STRICT JSON. Keys: Question, A, B, C, D, Correct, Explanation.
-    """
-    
-    resp = model.generate_content(prompt)
-    
-    # Parse
-    match = re.search(r'\{.*\}', resp.text, re.DOTALL) # Look for object
-    if not match: match = re.search(r'\[.*\]', resp.text, re.DOTALL) # Look for array
-    
-    if match:
-        json_str = match.group(0)
-        if json_str.startswith('{'): json_str = f"[{json_str}]"
-        data = json.loads(json_str)
-        
-        # Save
-        ws = sh.get_worksheet(0)
-        q = data[0]
-        now = str(datetime.now())
-        
-        ws.append_row([
-            f'AUTO-{int(time.time())}', 
-            now, 
-            sub, 
-            q.get('Question'), 
-            q.get('A'), q.get('B'), q.get('C'), q.get('D'), 
-            q.get('Correct'), 
-            q.get('Explanation')
-        ])
-        print(f"✅ SUCCESS! Question saved to {MASTER_SHEET_NAME}")
+    all_sheets = client.list_spreadsheet_files()
+    if not all_sheets:
+        print("   ⚠️ I cannot see ANY files.")
+        print(f"   👉 Please share the sheet with: {creds_dict['client_email']}")
     else:
-        print("⚠️ AI replied but no JSON found.")
+        print("   ⚠️ I see these files (check for typos!):")
+        for s in all_sheets:
+            print(f"   - '{s['name']}' (ID: {s['id']})")
+            
+    print("❌ Script stopped because Database is missing.")
+    exit(1)
 
-except Exception as e:
-    print(f"❌ AI ERROR: {e}")
+# --- 3. AUTO-DETECT MODEL ---
+def get_model():
+    try:
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        if 'models/gemini-1.5-flash' in models: return 'models/gemini-1.5-flash'
+        return models[0] if models else "models/gemini-pro"
+    except: return "models/gemini-pro"
+
+MODEL_NAME = get_model()
+print(f"🤖 Engine: {MODEL_NAME}")
+
+# --- 4. THE LOOP ---
+start_time = time.time()
+end_time = start_time + (RUNTIME_MINUTES * 60)
+
+while time.time() < end_time:
+    remaining = int(end_time - time.time())
+    print(f"\n⏰ Time Remaining: {remaining}s | Generating Question...")
+
+    try:
+        sub = random.choice(['IT', 'Quant', 'Reasoning', 'English'])
+        model = genai.GenerativeModel(MODEL_NAME)
+        prompt = f"""
+        Generate 1 MCQ for IBPS SO exam on subject: {sub}.
+        STRICT JSON. Keys: Question, A, B, C, D, Correct, Explanation.
+        """
+        
+        resp = model.generate_content(prompt, request_options={"timeout": 30})
+        
+        # Parse
+        match = re.search(r'\[.*\]|{.*}', resp.text.replace('\n', ' '), re.DOTALL)
+        if match:
+            json_str = match.group(0)
+            if json_str.startswith('{'): json_str = f"[{json_str}]"
+            data = json.loads(json_str)
+            
+            # Save
+            ws = sh.get_worksheet(0)
+            q = data[0]
+            ws.append_row([
+                f'AUTO-{int(time.time())}', 
+                str(datetime.now()), 
+                sub, 
+                q.get('Question'), 
+                q.get('A'), q.get('B'), q.get('C'), q.get('D'), 
+                q.get('Correct'), 
+                q.get('Explanation')
+            ])
+            print(f"   ✅ SUCCESS! Saved new question.")
+            time.sleep(15) # Wait 15s
+        else:
+            print("   ⚠️ No JSON found.")
+            time.sleep(5)
+
+    except Exception as e:
+        print(f"   ❌ Cycle Error: {e}")
+        if "429" in str(e): time.sleep(60)
+        else: time.sleep(5)
+
+print("\n🏁 Beast Bot finished.")
