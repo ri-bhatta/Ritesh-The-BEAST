@@ -9,10 +9,11 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURATION ---
-TARGET_SHEET = "IBPS_Bot_Data" 
+TARGET_SHEET = "IBPS_Bot_Data"
 RUNTIME_MINUTES = 5
+DELAY_SECONDS = 30  # Increased to 30s to prevent 429 Errors
 
-print(f"🚀 STARTING BEAST BOT (Target: {TARGET_SHEET})...")
+print(f"🚀 STARTING BEAST BOT v5.0 (Printing enabled)...")
 
 # --- 1. AUTHENTICATION ---
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
@@ -33,7 +34,6 @@ client = gspread.authorize(creds)
 try:
     sh = client.open(TARGET_SHEET)
     print(f"✅ SUCCESS! Connected to '{TARGET_SHEET}'")
-    print(f"🔗 Writing data to: {sh.url}")
     
     # Check/Add Headers
     ws = sh.get_worksheet(0)
@@ -41,13 +41,14 @@ try:
         ws.append_row(['ID','Date','Subject','Question','A','B','C','D','Correct','Explanation'])
 
 except gspread.SpreadsheetNotFound:
-    print(f"❌ ERROR: Still cannot find '{TARGET_SHEET}'. Check permissions.")
+    print(f"❌ ERROR: Could not find '{TARGET_SHEET}'. Check permissions.")
     exit(1)
 
 # --- 3. AUTO-DETECT MODEL ---
 def get_model():
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # Prioritize 1.5-flash for best free tier limits
         if 'models/gemini-1.5-flash' in models: return 'models/gemini-1.5-flash'
         return models[0] if models else "models/gemini-pro"
     except: return "models/gemini-pro"
@@ -81,7 +82,7 @@ while time.time() < end_time:
             data = json.loads(json_str)
             q = data[0]
 
-            # --- PRINT TO SCREEN (New Feature) ---
+            # --- PRINT TO SCREEN ---
             print("\n" + "="*40)
             print(f"🦁 Subject: {sub}")
             print(f"❓ Question: {q.get('Question')}")
@@ -91,7 +92,6 @@ while time.time() < end_time:
             print(f"   D) {q.get('D')}")
             print(f"✅ Correct: {q.get('Correct')}")
             print("="*40 + "\n")
-            # -------------------------------------
             
             # Save to Sheet
             ws = sh.get_worksheet(0)
@@ -104,15 +104,20 @@ while time.time() < end_time:
                 q.get('Correct'), 
                 q.get('Explanation')
             ])
-            print(f"   ✅ SUCCESS! Saved to Google Sheet.")
-            time.sleep(15) 
+            print(f"   ✅ SAVED to Google Sheet. Sleeping {DELAY_SECONDS}s...")
+            time.sleep(DELAY_SECONDS) 
         else:
             print("   ⚠️ No JSON found.")
-            time.sleep(5)
+            time.sleep(10)
 
     except Exception as e:
-        print(f"   ❌ Cycle Error: {e}")
-        if "429" in str(e): time.sleep(60)
-        else: time.sleep(5)
+        # If Quota Exceeded, wait a full minute
+        if "429" in str(e): 
+            print(f"   🛑 Quota Limit Hit (429). Pausing for 60s...")
+            time.sleep(60)
+        else:
+            print(f"   ❌ Cycle Error: {e}")
+            time.sleep(10)
 
 print("\n🏁 Beast Bot finished.")
+ 
