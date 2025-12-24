@@ -31,7 +31,7 @@ jobs:
       env:
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
-      run: python bot_script.py  # <--- HERE IS THE CONNECTION
+      run: python bot_py_script.py  # <--- HERE IS THE CONNECTION
     
     - name: Run The Generator
       env:
