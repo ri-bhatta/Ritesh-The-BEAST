@@ -9,8 +9,15 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import gspread
 from google.oauth2.service_account import Credentials
 
-# --- 1. SETUP ---
-print("🚀 Starting Beast Bot (DEBUG MODE)...")
+# --- CONFIGURATION ---
+RUNTIME_MINUTES = 5       # Run for 5 minutes
+RETRY_DELAY = 10          # Wait 10s if it fails
+SUCCESS_DELAY = 15        # Wait 15s after success (to save quota)
+MASTER_SHEET_NAME = "IBPS_Bot_Data"
+
+print(f"🚀 STARTING BEAST BOT LOOP (Running for {RUNTIME_MINUTES} mins)...")
+
+# --- 1. AUTHENTICATION (Do this once) ---
 GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 GCP_CREDS_JSON = os.environ.get('GCP_CREDENTIALS')
 
@@ -19,100 +26,107 @@ if not GCP_CREDS_JSON: print("❌ Error: GCP_CREDENTIALS missing"); exit(1)
 
 genai.configure(api_key=GEMINI_KEY)
 
-# --- 2. ROBUST MODEL SELECTION ---
-# We force 1.5-flash because it is the most stable for JSON
-active_model_name = "models/gemini-1.5-flash"
-print(f"🤖 Target Model: {active_model_name}")
+# Smart Model Selector
+def get_valid_model():
+    try:
+        all_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        priority = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro']
+        for p in priority:
+            for m in all_models:
+                if p in m: return m
+        return all_models[0]
+    except:
+        return "models/gemini-1.5-flash"
 
-# --- 3. GENERATION WITH DEBUGGING ---
-sub = random.choice(['IT', 'Quant', 'Reasoning', 'English', 'Computer'])
-print(f'🦁 Beast Bot Target: {sub}')
+active_model_name = get_valid_model()
+print(f"🤖 Engine Selected: {active_model_name}")
 
-safety_settings = {
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-}
-
-data = [] # Store questions here
-
-try:
-    print("⏳ Asking Gemini...")
-    model = genai.GenerativeModel(active_model_name)
-    prompt = f"""
-    Generate 5 MCQs for IBPS SO exam on subject: {sub}.
-    STRICT JSON ONLY. No markdown. No "Here is the JSON".
-    Format: [{{"Question": "...", "A": "...", "B": "...", "C": "...", "D": "...", "Correct": "A", "Explanation": "...", "Topic": "..."}}]
-    """
-    
-    # 30s Timeout
-    resp = model.generate_content(
-        prompt, 
-        safety_settings=safety_settings,
-        request_options={"timeout": 30}
-    )
-    
-    # --- CRITICAL DEBUG STEP ---
-    # This prints EXACTLY what the AI sent back. Look at this in your logs!
-    print(f"\n📝 RAW AI RESPONSE START:\n{resp.text}\n📝 RAW AI RESPONSE END\n")
-    
-    # Clean and Parse
-    raw_text = resp.text
-    match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-    
-    if match:
-        json_str = match.group(0)
-        # Fix common JSON breaks
-        json_str = re.sub(r'(?<!\\)\n', ' ', json_str)
-        try:
-            data = json.loads(json_str)
-            print(f"🧠 Successfully parsed {len(data)} questions.")
-        except:
-            print("⚠️ Parsing failed even after finding brackets.")
-    else:
-        print("⚠️ No JSON brackets [] found in response.")
-
-except Exception as e:
-    print(f"❌ AI Generation Error: {e}")
-
-# --- 4. BACKUP PLAN (The Fail-Safe) ---
-# If AI failed (data is empty), we create a dummy question so the script DOES NOT CRASH.
-if not data:
-    print("⚠️ AI Failed to provide valid JSON. Using BACKUP QUESTION to keep pipeline alive.")
-    data = [{
-        "Question": f"⚠️ AI ERROR on {sub}. This is a test row to prove Database works.",
-        "A": "Ignore", "B": "Ignore", "C": "Ignore", "D": "Ignore",
-        "Correct": "A", "Explanation": "Check GitHub Logs for 'RAW AI RESPONSE'",
-        "Topic": "Debug"
-    }]
-
-# --- 5. SAVE TO SHEETS ---
+# --- 2. CONNECT TO DATABASE (Do this once) ---
 try:
     print("📡 Connecting to Google Sheets...")
     creds_dict = json.loads(GCP_CREDS_JSON)
     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
-
-    map_sub = {'IT': 'Questions', 'Quant': 'Quant', 'Reasoning': 'Reasoning', 'English': 'Eng', 'Computer': 'Comp'}
-    prefix = map_sub.get(sub, 'Questions')
-    now = datetime.now()
-    sheet_name = f'{prefix}_{now.year}_{now.month:02d}'
-
-    try: 
-        sh = client.open(sheet_name)
-    except: 
-        print(f"🆕 Creating Sheet: {sheet_name}")
-        sh = client.create(sheet_name)
-        sh.share(creds_dict['client_email'], perm_type='user', role='writer')
-        sh.get_worksheet(0).append_row(['ID','Date','Topic','Question','A','B','C','D','E','Correct','Explanation'])
-
-    ws = sh.get_worksheet(0)
-    rows = [[f'AUTO-{int(time.time())}', str(now), q.get('Topic', sub), q.get('Question'), q.get('A'), q.get('B'), q.get('C'), q.get('D'), '', q.get('Correct'), q.get('Explanation')] for q in data]
-    ws.append_rows(rows)
-    print(f"✅ SUCCESS! Saved {len(data)} rows to {sheet_name}")
-
+    
+    # Verify Sheet Exists
+    try:
+        sh = client.open(MASTER_SHEET_NAME)
+        print(f"✅ Connection Established: {MASTER_SHEET_NAME}")
+    except gspread.SpreadsheetNotFound:
+        print(f"❌ FATAL ERROR: Sheet '{MASTER_SHEET_NAME}' not found.")
+        print("👉 Please create 'IBPS_Bot_Data' in Google Drive and share it with the bot.")
+        exit(1)
 except Exception as e:
-    print(f"❌ Database Error: {e}")
+    print(f"❌ FATAL AUTH ERROR: {e}")
     exit(1)
+
+# --- 3. THE LOOP (Running for 5 Minutes) ---
+start_time = time.time()
+end_time = start_time + (RUNTIME_MINUTES * 60)
+
+while time.time() < end_time:
+    remaining = int(end_time - time.time())
+    print(f"\n⏰ Time Remaining: {remaining}s | Starting new cycle...")
+
+    try:
+        # --- A. GENERATE CONTENT ---
+        sub = random.choice(['IT', 'Quant', 'Reasoning', 'English', 'Computer'])
+        print(f"   🦁 Hunting for: {sub}")
+
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+
+        model = genai.GenerativeModel(active_model_name)
+        prompt = f"""
+        Generate 3 MCQs for IBPS SO exam on subject: {sub}.
+        STRICT JSON ONLY. No markdown.
+        Format: [{{"Question": "...", "A": "...", "B": "...", "C": "...", "D": "...", "Correct": "A", "Explanation": "..."}}]
+        """
+        
+        # Timeout set to 30s to prevent hanging
+        resp = model.generate_content(prompt, safety_settings=safety_settings, request_options={"timeout": 30})
+        
+        # --- B. PARSE JSON ---
+        match = re.search(r'\[.*\]', resp.text, re.DOTALL)
+        if not match:
+            print("   ⚠️ No JSON found. Skipping this turn.")
+            time.sleep(5)
+            continue
+
+        json_str = match.group(0)
+        json_str = re.sub(r'(?<!\\)\n', ' ', json_str)
+        data = json.loads(json_str)
+
+        # --- C. SAVE TO SHEET ---
+        ws = sh.get_worksheet(0)
+        now = str(datetime.now())
+        rows = []
+        for q in data:
+            rows.append([
+                f'AUTO-{int(time.time())}', 
+                now, 
+                sub, 
+                q.get('Question'), 
+                q.get('A'), q.get('B'), q.get('C'), q.get('D'), 
+                q.get('Correct'), 
+                q.get('Explanation')
+            ])
+        
+        ws.append_rows(rows)
+        print(f"   ✅ SUCCESS! Added {len(data)} questions.")
+        
+        # Sleep to be nice to Google API
+        print(f"   💤 Resting for {SUCCESS_DELAY}s...")
+        time.sleep(SUCCESS_DELAY)
+
+    except Exception as e:
+        print(f"   ❌ ERROR this cycle: {e}")
+        print(f"   🔄 Retrying in {RETRY_DELAY}s...")
+        time.sleep(RETRY_DELAY)
+
+print("\n🏁 TIMEOUT REACHED. Beast Bot going to sleep.")
