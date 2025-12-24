@@ -39,7 +39,7 @@ if not active_model_name:
 sub = random.choice(['IT', 'Quant', 'Reasoning', 'English', 'Computer'])
 print(f'🦁 Beast Bot Target: {sub}')
 
-# SAFETY SETTINGS: Turn off the filters that block content randomly
+# SAFETY SETTINGS: Turn off the filters that block content
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -64,12 +64,12 @@ try:
     ]
     """
     
-    # Pass safety settings to prevent empty responses
+    # Pass safety settings
     resp = model.generate_content(prompt, safety_settings=safety_settings)
     
-    # --- ROBUST CLEANING (The Fix) ---
+    # --- ROBUST CLEANING ---
     raw_text = resp.text
-    # Use Regex to find the JSON array [...] inside the text
+    # Regex to find JSON array
     match = re.search(r'\[.*\]', raw_text, re.DOTALL)
     
     if match:
@@ -81,9 +81,6 @@ try:
 
 except Exception as e:
     print(f"❌ Generation Failed: {e}")
-    # Print the full error to help debug
-    if 'resp' in locals():
-        print(f"Dump: {resp.prompt_feedback}")
     exit(1)
 
 # --- 4. SAVE TO SHEETS ---
