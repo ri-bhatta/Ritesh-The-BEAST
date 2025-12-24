@@ -47,7 +47,7 @@ jobs:
 
         # 3. ASK GEMINI (THE BRAIN)
         genai.configure(api_key=GEMINI_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-pro')
         prompt = f'Generate 5 High-Level MCQs for IBPS SO {sub}. Format: JSON Array with keys: Question, A, B, C, D, Correct, Explanation, Topic.'
         
         try:
